@@ -71,19 +71,31 @@ export class RabbitMQService implements OnApplicationShutdown {
     }
   }
 
-  // 요청-응답 (Send)
-  async send(queue: string, pattern: string, payload: any): Promise<any> {
-    try {
-      const client = await this.createClient(queue);
-      return await firstValueFrom(client.send(queue, { pattern, payload }));
-    } catch (error) {
-      console.error(
-        `"${pattern}" 패턴을 사용하여 "${queue}" 대기열에 메시지를 보내는 중 오류가 발생했습니다:`,
-        error,
-      );
-      throw error;
-    }
-  }
+	// 요청-응답 (Send) with Retry
+	async send(queue: string, pattern: string, payload: any, retries = 3, backoff = 300): Promise<any> {
+		for (let attempt = 1; attempt <= retries + 1; attempt++) {
+			try {
+				const client = await this.createClient(queue);
+				return await firstValueFrom(client.send(queue, { pattern, payload }));
+			} catch (error:any) {
+				console.error(
+					`"${pattern}" 패턴을 사용하여 "${queue}" 대기열에 메시지를 보내는 중 오류가 발생했습니다 (시도 ${attempt}/${retries + 1}):`,
+					error.message || error,
+				);
+
+				// 마지막 시도였는지 확인
+				if (attempt > retries) {
+					console.error(`최대 재시도 횟수 초과. 요청 실패: ${pattern}`);
+					throw error;
+				}
+
+				// 점진적으로 대기 시간 증가 (300ms, 600ms, 1200ms...)
+				const delay = backoff * Math.pow(2, attempt - 1);
+				console.log(`${delay}ms 후 재시도...`);
+				await new Promise(resolve => setTimeout(resolve, delay));
+			}
+		}
+	}
 
   // 애플리케이션 종료 시 모든 연결 닫기
   async onApplicationShutdown(): Promise<void> {
